@@ -22,8 +22,8 @@ help:
 	@echo "  FRONTEND_ORIGIN=$(FRONTEND_ORIGIN)"
 	@echo "  BINARY=$(BINARY)"
 
-dev:
-	GO="$(GO)" SERVER_PKG="$(SERVER_PKG)" BINARY="$(BINARY)" ADDR="$(ADDR)" OMP_ROOT="$(OMP_ROOT)" FRONTEND_ORIGIN="$(FRONTEND_ORIGIN)" ./scripts/dev.sh
+dev: build
+	"$(BINARY)" -addr "$(ADDR)" -omp-root "$(OMP_ROOT)" -frontend-origin "$(FRONTEND_ORIGIN)"
 
 build:
 	mkdir -p $(dir $(BINARY))

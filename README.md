@@ -19,10 +19,10 @@ The server reads OMP session data from `~/.omp/agent` and exposes a localhost HT
 ## Development
 
 ```bash
-./scripts/dev.sh
+make dev
 ```
 
-The script builds `bin/omp-session-viewer-server`, runs that binary, and exits cleanly on `Ctrl+C`. You can still use `make dev`, but some terminals/runners report `make` itself as interrupted; use the script directly if you want a clean zero-exit stop.
+`make dev` builds and runs the backend binary so the application handles `Ctrl+C` itself. Avoid `go run` for the dev server if you care about a clean interrupt exit; the `go run` wrapper can report the interrupt before the app's zero-exit shutdown is observed.
 
 Equivalent explicit command:
 
