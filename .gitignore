@@ -1,1 +1,7 @@
-cmd
+bin/
+/server
+*.test
+*.out
+*.log
+.DS_Store
+.idea/
