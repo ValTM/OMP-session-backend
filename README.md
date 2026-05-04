@@ -19,13 +19,16 @@ The server reads OMP session data from `~/.omp/agent` and exposes a localhost HT
 ## Development
 
 ```bash
-make dev
+./scripts/dev.sh
 ```
+
+The script builds `bin/omp-session-viewer-server`, runs that binary, and exits cleanly on `Ctrl+C`. You can still use `make dev`, but some terminals/runners report `make` itself as interrupted; use the script directly if you want a clean zero-exit stop.
 
 Equivalent explicit command:
 
 ```bash
-go run ./cmd/server -addr 127.0.0.1:8080 -omp-root ~/.omp/agent -frontend-origin http://localhost:5173
+go build -o bin/omp-session-viewer-server ./cmd/server
+./bin/omp-session-viewer-server -addr 127.0.0.1:8080 -omp-root ~/.omp/agent -frontend-origin http://localhost:5173
 ```
 
 ## Make targets

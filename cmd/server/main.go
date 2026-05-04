@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"omp-session-viewer/backend/internal/httpapi"
 	"omp-session-viewer/backend/internal/ompstore"
@@ -31,7 +36,38 @@ func main() {
 
 	log.Printf("serving OMP session viewer API on http://%s", *addr)
 	log.Printf("using OMP root %s", root)
-	if err := http.ListenAndServe(*addr, httpapi.NewServer(store, *frontendOrigin)); err != nil {
+	server := &http.Server{
+		Addr:    *addr,
+		Handler: httpapi.NewServer(store, *frontendOrigin),
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	case <-ctx.Done():
+	}
+
+	log.Print("shutting down OMP session viewer API")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
 		log.Fatal(err)
 	}
 }

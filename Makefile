@@ -23,7 +23,7 @@ help:
 	@echo "  BINARY=$(BINARY)"
 
 dev:
-	$(GO) run $(SERVER_PKG) -addr "$(ADDR)" -omp-root "$(OMP_ROOT)" -frontend-origin "$(FRONTEND_ORIGIN)"
+	GO="$(GO)" SERVER_PKG="$(SERVER_PKG)" BINARY="$(BINARY)" ADDR="$(ADDR)" OMP_ROOT="$(OMP_ROOT)" FRONTEND_ORIGIN="$(FRONTEND_ORIGIN)" ./scripts/dev.sh
 
 build:
 	mkdir -p $(dir $(BINARY))
