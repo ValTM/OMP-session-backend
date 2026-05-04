@@ -118,6 +118,29 @@ func TestParseSessionFileHidesThinking(t *testing.T) {
 		t.Fatalf("unexpected message text %q", parsed.Messages[0].Text)
 	}
 }
+func TestParseSessionFileCountsOnlyActualMessages(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"user-1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","id":"tool-call-1","timestamp":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"read"}]}}
+{"type":"message","id":"tool-result-1","timestamp":"2026-01-01T00:00:03Z","message":{"role":"toolResult","toolName":"read","content":[{"type":"text","text":"file contents"}]}}
+{"type":"message","id":"assistant-1","timestamp":"2026-01-01T00:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := ParseSessionFile(rollout, false)
+	if parsed.MessageCount != 2 {
+		t.Fatalf("expected only user/assistant text messages to count, got %d", parsed.MessageCount)
+	}
+	if len(parsed.Messages) != 4 {
+		t.Fatalf("expected tool messages to remain inspectable, got %d messages", len(parsed.Messages))
+	}
+	if parsed.Messages[1].Role != "toolCall" {
+		t.Fatalf("expected tool call role, got %q", parsed.Messages[1].Role)
+	}
+}
+
 func TestListSessionsMessageCountFilters(t *testing.T) {
 	tmp := t.TempDir()
 	emptyRollout := filepath.Join(tmp, "empty.jsonl")

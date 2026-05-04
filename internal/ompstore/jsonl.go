@@ -42,7 +42,9 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 		}
 
 		result.Messages = append(result.Messages, message)
-		result.MessageCount++
+		if isActualMessage(message) {
+			result.MessageCount++
+		}
 		searchParts = append(searchParts, message.Text)
 		if !message.Timestamp.IsZero() && (result.LatestMessageAt == nil || message.Timestamp.After(*result.LatestMessageAt)) {
 			latest := message.Timestamp
@@ -89,12 +91,16 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 		return SessionMessage{}, false, err
 	}
 
-	text := readableContent(payload.Content)
+	content := readableContent(payload.Content)
+	text := content.Text
+	role := payload.Role
 	if payload.Role == "toolResult" {
 		text = stripToolLineAnchors(text)
 		if payload.ToolName != "" && text != "" {
 			text = "Tool result: " + payload.ToolName + "\n" + text
 		}
+	} else if content.HasToolCall && !content.HasText {
+		role = "toolCall"
 	}
 
 	timestamp := time.Time{}
@@ -109,7 +115,7 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 		ID:        envelope.ID,
 		ParentID:  envelope.ParentID,
 		Timestamp: timestamp,
-		Role:      payload.Role,
+		Role:      role,
 		Text:      text,
 		Type:      envelope.Type,
 	}
@@ -120,14 +126,25 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 	return message, true, nil
 }
 
-func readableContent(raw json.RawMessage) string {
+type readableContentResult struct {
+	Text        string
+	HasText     bool
+	HasToolCall bool
+}
+
+func isActualMessage(message SessionMessage) bool {
+	return message.Role != "toolResult" && message.Role != "toolCall"
+}
+
+func readableContent(raw json.RawMessage) readableContentResult {
 	if len(raw) == 0 || string(raw) == "null" {
-		return ""
+		return readableContentResult{}
 	}
 
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return strings.TrimSpace(text)
+		text = strings.TrimSpace(text)
+		return readableContentResult{Text: text, HasText: text != ""}
 	}
 
 	var parts []struct {
@@ -138,15 +155,20 @@ func readableContent(raw json.RawMessage) string {
 		Content  json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return ""
+		return readableContentResult{}
 	}
 
 	var out []string
+	var hasText bool
+	var hasToolCall bool
 	for _, part := range parts {
 		switch part.Type {
 		case "text", "output_text":
-			appendIfNotEmpty(&out, part.Text)
+			if appendIfNotEmpty(&out, part.Text) {
+				hasText = true
+			}
 		case "toolCall":
+			hasToolCall = true
 			name := part.Name
 			if name == "" {
 				name = part.ToolName
@@ -157,10 +179,12 @@ func readableContent(raw json.RawMessage) string {
 		case "reasoning", "thinking":
 			// Intentionally hidden: these entries often contain encrypted thinking blobs.
 		default:
-			appendIfNotEmpty(&out, part.Text)
+			if appendIfNotEmpty(&out, part.Text) {
+				hasText = true
+			}
 		}
 	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
+	return readableContentResult{Text: strings.TrimSpace(strings.Join(out, "\n")), HasText: hasText, HasToolCall: hasToolCall}
 }
 
 func stripToolLineAnchors(text string) string {
@@ -194,9 +218,11 @@ func stripToolLineAnchor(line string) string {
 	return rest
 }
 
-func appendIfNotEmpty(out *[]string, value string) {
+func appendIfNotEmpty(out *[]string, value string) bool {
 	value = strings.TrimSpace(value)
-	if value != "" {
-		*out = append(*out, value)
+	if value == "" {
+		return false
 	}
+	*out = append(*out, value)
+	return true
 }
