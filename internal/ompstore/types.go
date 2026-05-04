@@ -30,6 +30,15 @@ type SessionMessage struct {
 	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
+type MessageListResult struct {
+	Items           []SessionMessage `json:"items"`
+	Total           int              `json:"total"`
+	Limit           int              `json:"limit"`
+	Offset          int              `json:"offset"`
+	ToolCallCount   int              `json:"toolCallCount"`
+	ToolResultCount int              `json:"toolResultCount"`
+}
+
 type ListSessionsFilter struct {
 	Query                string
 	CWD                  string

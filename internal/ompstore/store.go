@@ -166,14 +166,22 @@ func (s *Store) GetSession(ctx context.Context, id string) (SessionSummary, erro
 	return summary, nil
 }
 
-func (s *Store) GetMessages(ctx context.Context, id string, includeRaw bool, limit int, offset int) ([]SessionMessage, error) {
+func (s *Store) GetMessages(
+	ctx context.Context,
+	id string,
+	includeRaw bool,
+	includeToolCalls bool,
+	includeToolResults bool,
+	limit int,
+	offset int,
+) (MessageListResult, error) {
 	session, err := s.GetSession(ctx, id)
 	if err != nil {
-		return nil, err
+		return MessageListResult{}, err
 	}
 	parsed := ParseSessionFile(session.RolloutPath, includeRaw)
 	if parsed.ParseError != nil && len(parsed.Messages) == 0 {
-		return nil, errors.New(*parsed.ParseError)
+		return MessageListResult{}, errors.New(*parsed.ParseError)
 	}
 	if limit <= 0 {
 		limit = 200
@@ -181,13 +189,43 @@ func (s *Store) GetMessages(ctx context.Context, id string, includeRaw bool, lim
 	if offset < 0 {
 		offset = 0
 	}
-	start := min(offset, len(parsed.Messages))
-	end := min(start+limit, len(parsed.Messages))
-	messages := parsed.Messages[start:end]
+
+	var filtered []SessionMessage
+	var toolCallCount int
+	var toolResultCount int
+	for _, message := range parsed.Messages {
+		switch {
+		case isToolCall(message):
+			toolCallCount++
+			if includeToolCalls {
+				filtered = append(filtered, message)
+			}
+		case isToolResult(message):
+			toolResultCount++
+			if includeToolResults {
+				filtered = append(filtered, message)
+			}
+		default:
+			filtered = append(filtered, message)
+		}
+	}
+
+	total := len(filtered)
+	start := min(offset, total)
+	end := min(start+limit, total)
+	messages := filtered[start:end]
 	if messages == nil {
 		messages = []SessionMessage{}
 	}
-	return messages, nil
+	return MessageListResult{Items: messages, Total: total, Limit: limit, Offset: offset, ToolCallCount: toolCallCount, ToolResultCount: toolResultCount}, nil
+}
+
+func isToolCall(message SessionMessage) bool {
+	return message.Role == "toolCall"
+}
+
+func isToolResult(message SessionMessage) bool {
+	return message.Role == "toolResult"
 }
 
 func (s *Store) ListCWDs(ctx context.Context) ([]CWDOption, error) {

@@ -169,6 +169,36 @@ func TestParseSessionFileClassifiesMixedAssistantToolTurnAsToolCall(t *testing.T
 	}
 }
 
+func TestGetMessagesFiltersToolsBeforePagination(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"tool-call-1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"read"}]}}
+{"type":"message","id":"tool-result-1","timestamp":"2026-01-01T00:00:02Z","message":{"role":"toolResult","toolName":"read","content":[{"type":"text","text":"file contents"}]}}
+{"type":"message","id":"tool-call-2","timestamp":"2026-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"grep"}]}}
+{"type":"message","id":"user-1","timestamp":"2026-01-01T00:00:04Z","message":{"role":"user","content":[{"type":"text","text":"actual prompt"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db := setupDB(t, rollout)
+	store := NewForTest(db)
+	defer store.Close()
+
+	result, err := store.GetMessages(context.Background(), "abc", false, false, false, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one actual message after filtering tools before pagination, got total=%d len=%d", result.Total, len(result.Items))
+	}
+	if result.Items[0].Text != "actual prompt" {
+		t.Fatalf("unexpected message %q", result.Items[0].Text)
+	}
+	if result.ToolCallCount != 2 || result.ToolResultCount != 1 {
+		t.Fatalf("unexpected tool counts: calls=%d results=%d", result.ToolCallCount, result.ToolResultCount)
+	}
+}
+
 func TestListSessionsMessageCountFilters(t *testing.T) {
 	tmp := t.TempDir()
 	emptyRollout := filepath.Join(tmp, "empty.jsonl")

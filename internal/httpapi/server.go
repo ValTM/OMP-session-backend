@@ -97,6 +97,8 @@ func (s *Server) getMessages(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		r.PathValue("id"),
 		strings.EqualFold(query.Get("includeRaw"), "true"),
+		boolQuery(query.Get("includeToolCalls")),
+		boolQuery(query.Get("includeToolResults")),
 		intQuery(query.Get("limit"), 200),
 		intQuery(query.Get("offset"), 0),
 	)
@@ -104,7 +106,7 @@ func (s *Server) getMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, statusForStoreError(err), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": messages})
+	writeJSON(w, http.StatusOK, messages)
 }
 
 func (s *Server) listCWDs(w http.ResponseWriter, r *http.Request) {
