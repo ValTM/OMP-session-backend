@@ -44,6 +44,10 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 		result.Messages = append(result.Messages, message)
 		result.MessageCount++
 		searchParts = append(searchParts, message.Text)
+		if !message.Timestamp.IsZero() && (result.LatestMessageAt == nil || message.Timestamp.After(*result.LatestMessageAt)) {
+			latest := message.Timestamp
+			result.LatestMessageAt = &latest
+		}
 
 		if result.FirstUserPrompt == nil && message.Role == "user" {
 			text := message.Text

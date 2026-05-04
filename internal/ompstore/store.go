@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,12 +15,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type cachedParseResult struct {
+	result  ParseResult
+	modTime time.Time
+	size    int64
+}
+
 type Store struct {
 	ompRoot string
 	agentDB *sql.DB
 
 	cacheMu sync.Mutex
-	cache   map[string]ParseResult
+	cache   map[string]cachedParseResult
 }
 
 func Open(ompRoot string) (*Store, error) {
@@ -36,12 +43,12 @@ func Open(ompRoot string) (*Store, error) {
 	return &Store{
 		ompRoot: ompRoot,
 		agentDB: agentDB,
-		cache:   make(map[string]ParseResult),
+		cache:   make(map[string]cachedParseResult),
 	}, nil
 }
 
 func NewForTest(agentDB *sql.DB) *Store {
-	return &Store{agentDB: agentDB, cache: make(map[string]ParseResult)}
+	return &Store{agentDB: agentDB, cache: make(map[string]cachedParseResult)}
 }
 
 func (s *Store) Close() error {
@@ -107,9 +114,12 @@ func (s *Store) ListSessions(ctx context.Context, filter ListSessionsFilter) (Li
 		return ListSessionsResult{}, err
 	}
 
-	if filter.Sort == "updatedAtAsc" {
-		sort.SliceStable(all, func(i, j int) bool { return all[i].UpdatedAt.Before(all[j].UpdatedAt) })
-	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if filter.Sort == "updatedAtAsc" {
+			return all[i].UpdatedAt.Before(all[j].UpdatedAt)
+		}
+		return all[i].UpdatedAt.After(all[j].UpdatedAt)
+	})
 
 	total := len(all)
 	start := min(filter.Offset, total)
@@ -214,6 +224,9 @@ func (s *Store) enrichSummary(summary *SessionSummary) {
 	summary.FirstUserPrompt = parsed.FirstUserPrompt
 	summary.MessageCount = parsed.MessageCount
 	summary.ParseError = parsed.ParseError
+	if parsed.LatestMessageAt != nil && parsed.LatestMessageAt.After(summary.UpdatedAt) {
+		summary.UpdatedAt = parsed.LatestMessageAt.UTC()
+	}
 	summary.SearchText = strings.Join([]string{
 		summary.ID,
 		summary.CWD,
@@ -226,17 +239,22 @@ func (s *Store) enrichSummary(summary *SessionSummary) {
 }
 
 func (s *Store) cachedParse(path string) ParseResult {
-	s.cacheMu.Lock()
-	cached, ok := s.cache[path]
-	s.cacheMu.Unlock()
-	if ok {
-		return cached
+	stat, statErr := os.Stat(path)
+	if statErr == nil {
+		s.cacheMu.Lock()
+		cached, ok := s.cache[path]
+		s.cacheMu.Unlock()
+		if ok && cached.modTime.Equal(stat.ModTime()) && cached.size == stat.Size() {
+			return cached.result
+		}
 	}
 
 	parsed := ParseSessionFile(path, false)
-	s.cacheMu.Lock()
-	s.cache[path] = parsed
-	s.cacheMu.Unlock()
+	if statErr == nil {
+		s.cacheMu.Lock()
+		s.cache[path] = cachedParseResult{result: parsed, modTime: stat.ModTime(), size: stat.Size()}
+		s.cacheMu.Unlock()
+	}
 	return parsed
 }
 

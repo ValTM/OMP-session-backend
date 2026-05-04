@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -37,6 +38,67 @@ func TestListSessionsSearchesSummaryAndPrompt(t *testing.T) {
 	}
 	if result.Items[0].MessageCount != 2 {
 		t.Fatalf("expected 2 readable messages, got %d", result.Items[0].MessageCount)
+	}
+}
+
+func TestListSessionsUsesLatestMessageTimestampForUpdatedAt(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"m1","timestamp":"2026-01-03T04:05:06Z","message":{"role":"user","content":[{"type":"text","text":"newer than db"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db := setupDB(t, rollout)
+	store := NewForTest(db)
+	defer store.Close()
+
+	result, err := store.ListSessions(context.Background(), ListSessionsFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mustParseTime(t, "2026-01-03T04:05:06Z")
+	if !result.Items[0].UpdatedAt.Equal(want) {
+		t.Fatalf("expected latest message timestamp %s, got %s", want, result.Items[0].UpdatedAt)
+	}
+}
+
+func TestListSessionsReparsesChangedRolloutFiles(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"m1","timestamp":"2026-01-02T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"first"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db := setupDB(t, rollout)
+	store := NewForTest(db)
+	defer store.Close()
+
+	first, err := store.ListSessions(context.Background(), ListSessionsFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Items[0].MessageCount != 1 {
+		t.Fatalf("expected initial message count 1, got %d", first.Items[0].MessageCount)
+	}
+
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"m1","timestamp":"2026-01-02T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"first"}]}}
+{"type":"message","id":"m2","timestamp":"2026-01-04T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := store.ListSessions(context.Background(), ListSessionsFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Items[0].MessageCount != 2 {
+		t.Fatalf("expected changed rollout to be reparsed, got message count %d", second.Items[0].MessageCount)
+	}
+	want := mustParseTime(t, "2026-01-04T00:00:00Z")
+	if !second.Items[0].UpdatedAt.Equal(want) {
+		t.Fatalf("expected updated time %s after reparse, got %s", want, second.Items[0].UpdatedAt)
 	}
 }
 
@@ -145,6 +207,15 @@ func TestParseSessionFileStripsToolResultLineAnchors(t *testing.T) {
 			t.Fatalf("expected %q in %q", wanted, text)
 		}
 	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func setupDB(t *testing.T, rollout string) *sql.DB {

@@ -58,6 +58,7 @@ type CWDOption struct {
 type ParseResult struct {
 	FirstUserPrompt *string
 	MessageCount    int
+	LatestMessageAt *time.Time
 	Messages        []SessionMessage
 	SearchText      string
 	ParseError      *string
