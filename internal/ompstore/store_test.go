@@ -139,6 +139,35 @@ func TestParseSessionFileCountsOnlyActualMessages(t *testing.T) {
 	if parsed.Messages[1].Role != "toolCall" {
 		t.Fatalf("expected tool call role, got %q", parsed.Messages[1].Role)
 	}
+	if parsed.Messages[1].Text != "Tool call: read" {
+		t.Fatalf("unexpected tool call text %q", parsed.Messages[1].Text)
+	}
+}
+
+func TestParseSessionFileSplitsAssistantTextAndToolCalls(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"message","id":"assistant-1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Verify nothing remains:"},{"type":"toolCall","name":"bash"},{"type":"toolCall","name":"grep"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := ParseSessionFile(rollout, false)
+	if parsed.MessageCount != 1 {
+		t.Fatalf("expected only visible assistant text to count, got %d", parsed.MessageCount)
+	}
+	if len(parsed.Messages) != 3 {
+		t.Fatalf("expected assistant text plus two tool calls, got %d messages", len(parsed.Messages))
+	}
+	if parsed.Messages[0].Role != "assistant" || parsed.Messages[0].Text != "Verify nothing remains:" {
+		t.Fatalf("unexpected assistant message: %#v", parsed.Messages[0])
+	}
+	if parsed.Messages[1].Role != "toolCall" || parsed.Messages[1].Text != "Tool call: bash" {
+		t.Fatalf("unexpected first tool call: %#v", parsed.Messages[1])
+	}
+	if parsed.Messages[2].Role != "toolCall" || parsed.Messages[2].Text != "Tool call: grep" {
+		t.Fatalf("unexpected second tool call: %#v", parsed.Messages[2])
+	}
 }
 
 func TestListSessionsMessageCountFilters(t *testing.T) {

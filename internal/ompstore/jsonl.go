@@ -31,29 +31,32 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 			continue
 		}
 
-		message, ok, err := parseJSONLMessage(line, includeRaw)
+		messages, err := parseJSONLMessages(line, includeRaw)
 		if err != nil {
 			msg := fmt.Sprintf("line %d: %v", lineNumber, err)
 			result.ParseError = &msg
 			continue
 		}
-		if !ok || strings.TrimSpace(message.Text) == "" {
-			continue
-		}
 
-		result.Messages = append(result.Messages, message)
-		if isActualMessage(message) {
-			result.MessageCount++
-		}
-		searchParts = append(searchParts, message.Text)
-		if !message.Timestamp.IsZero() && (result.LatestMessageAt == nil || message.Timestamp.After(*result.LatestMessageAt)) {
-			latest := message.Timestamp
-			result.LatestMessageAt = &latest
-		}
+		for _, message := range messages {
+			if strings.TrimSpace(message.Text) == "" {
+				continue
+			}
 
-		if result.FirstUserPrompt == nil && message.Role == "user" {
-			text := message.Text
-			result.FirstUserPrompt = &text
+			result.Messages = append(result.Messages, message)
+			if isActualMessage(message) {
+				result.MessageCount++
+			}
+			searchParts = append(searchParts, message.Text)
+			if !message.Timestamp.IsZero() && (result.LatestMessageAt == nil || message.Timestamp.After(*result.LatestMessageAt)) {
+				latest := message.Timestamp
+				result.LatestMessageAt = &latest
+			}
+
+			if result.FirstUserPrompt == nil && message.Role == "user" {
+				text := message.Text
+				result.FirstUserPrompt = &text
+			}
 		}
 	}
 
@@ -66,7 +69,7 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 	return result
 }
 
-func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, error) {
+func parseJSONLMessages(line []byte, includeRaw bool) ([]SessionMessage, error) {
 	var envelope struct {
 		Type      string          `json:"type"`
 		ID        string          `json:"id"`
@@ -74,12 +77,11 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 		Timestamp string          `json:"timestamp"`
 		Message   json.RawMessage `json:"message"`
 	}
-
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return SessionMessage{}, false, err
+		return nil, err
 	}
 	if envelope.Type != "message" || len(envelope.Message) == 0 {
-		return SessionMessage{}, false, nil
+		return nil, nil
 	}
 
 	var payload struct {
@@ -88,19 +90,7 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 		ToolName string          `json:"toolName"`
 	}
 	if err := json.Unmarshal(envelope.Message, &payload); err != nil {
-		return SessionMessage{}, false, err
-	}
-
-	content := readableContent(payload.Content)
-	text := content.Text
-	role := payload.Role
-	if payload.Role == "toolResult" {
-		text = stripToolLineAnchors(text)
-		if payload.ToolName != "" && text != "" {
-			text = "Tool result: " + payload.ToolName + "\n" + text
-		}
-	} else if content.HasToolCall && !content.HasText {
-		role = "toolCall"
+		return nil, err
 	}
 
 	timestamp := time.Time{}
@@ -111,25 +101,48 @@ func parseJSONLMessage(line []byte, includeRaw bool) (SessionMessage, bool, erro
 		}
 	}
 
-	message := SessionMessage{
+	base := SessionMessage{
 		ID:        envelope.ID,
 		ParentID:  envelope.ParentID,
 		Timestamp: timestamp,
-		Role:      role,
-		Text:      text,
+		Role:      payload.Role,
 		Type:      envelope.Type,
 	}
 	if includeRaw {
-		message.Raw = append(json.RawMessage(nil), line...)
+		base.Raw = append(json.RawMessage(nil), line...)
 	}
 
-	return message, true, nil
+	if payload.Role == "toolResult" {
+		content := readableContent(payload.Content)
+		text := stripToolLineAnchors(content.Text)
+		if payload.ToolName != "" && text != "" {
+			text = "Tool result: " + payload.ToolName + "\n" + text
+		}
+		base.Text = text
+		return []SessionMessage{base}, nil
+	}
+
+	content := readableContent(payload.Content)
+	messages := make([]SessionMessage, 0, 1+len(content.ToolCallNames))
+	if content.Text != "" {
+		message := base
+		message.Text = content.Text
+		messages = append(messages, message)
+	}
+	for index, name := range content.ToolCallNames {
+		message := base
+		message.ID = fmt.Sprintf("%s:toolCall:%d", envelope.ID, index)
+		message.Role = "toolCall"
+		message.Text = "Tool call: " + name
+		messages = append(messages, message)
+	}
+	return messages, nil
 }
 
 type readableContentResult struct {
-	Text        string
-	HasText     bool
-	HasToolCall bool
+	Text          string
+	HasText       bool
+	ToolCallNames []string
 }
 
 func isActualMessage(message SessionMessage) bool {
@@ -160,7 +173,7 @@ func readableContent(raw json.RawMessage) readableContentResult {
 
 	var out []string
 	var hasText bool
-	var hasToolCall bool
+	var toolCallNames []string
 	for _, part := range parts {
 		switch part.Type {
 		case "text", "output_text":
@@ -168,13 +181,12 @@ func readableContent(raw json.RawMessage) readableContentResult {
 				hasText = true
 			}
 		case "toolCall":
-			hasToolCall = true
 			name := part.Name
 			if name == "" {
 				name = part.ToolName
 			}
 			if name != "" {
-				out = append(out, "Tool call: "+name)
+				toolCallNames = append(toolCallNames, name)
 			}
 		case "reasoning", "thinking":
 			// Intentionally hidden: these entries often contain encrypted thinking blobs.
@@ -184,7 +196,7 @@ func readableContent(raw json.RawMessage) readableContentResult {
 			}
 		}
 	}
-	return readableContentResult{Text: strings.TrimSpace(strings.Join(out, "\n")), HasText: hasText, HasToolCall: hasToolCall}
+	return readableContentResult{Text: strings.TrimSpace(strings.Join(out, "\n")), HasText: hasText, ToolCallNames: toolCallNames}
 }
 
 func stripToolLineAnchors(text string) string {
