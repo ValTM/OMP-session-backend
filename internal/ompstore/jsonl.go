@@ -31,6 +31,16 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 			continue
 		}
 
+		title, err := parseJSONLSessionTitle(line)
+		if err != nil {
+			msg := fmt.Sprintf("line %d: %v", lineNumber, err)
+			result.ParseError = &msg
+			continue
+		}
+		if result.Title == nil && title != "" {
+			result.Title = &title
+		}
+
 		messages, err := parseJSONLMessages(line, includeRaw)
 		if err != nil {
 			msg := fmt.Sprintf("line %d: %v", lineNumber, err)
@@ -67,6 +77,20 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 
 	result.SearchText = strings.Join(searchParts, " ")
 	return result
+}
+
+func parseJSONLSessionTitle(line []byte) (string, error) {
+	var envelope struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return "", err
+	}
+	if envelope.Type != "session" {
+		return "", nil
+	}
+	return strings.TrimSpace(envelope.Title), nil
 }
 
 func parseJSONLMessages(line []byte, includeRaw bool) ([]SessionMessage, error) {

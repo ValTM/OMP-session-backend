@@ -15,7 +15,7 @@ import (
 func TestListSessionsSearchesSummaryAndPrompt(t *testing.T) {
 	tmp := t.TempDir()
 	rollout := filepath.Join(tmp, "session.jsonl")
-	if err := os.WriteFile(rollout, []byte(`{"type":"session","version":3,"id":"abc","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp"}
+	if err := os.WriteFile(rollout, []byte(`{"type":"session","version":3,"id":"abc","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp","title":"CDC Datastream Recovery","titleSource":"user"}
 {"type":"message","id":"m1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Find CDC datastream session"}]}}
 {"type":"message","id":"m2","timestamp":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Found it"}]}}
 `), 0o600); err != nil {
@@ -32,6 +32,9 @@ func TestListSessionsSearchesSummaryAndPrompt(t *testing.T) {
 	}
 	if result.Total != 1 {
 		t.Fatalf("expected one match, got %d", result.Total)
+	}
+	if got := stringValue(result.Items[0].Title); got != "CDC Datastream Recovery" {
+		t.Fatalf("unexpected title %q", got)
 	}
 	if got := stringValue(result.Items[0].FirstUserPrompt); got != "Find CDC datastream session" {
 		t.Fatalf("unexpected first prompt %q", got)

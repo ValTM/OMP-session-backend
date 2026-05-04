@@ -259,6 +259,7 @@ func (s *Store) ListCWDs(ctx context.Context) ([]CWDOption, error) {
 
 func (s *Store) enrichSummary(summary *SessionSummary) {
 	parsed := s.cachedParse(summary.RolloutPath)
+	summary.Title = parsed.Title
 	summary.FirstUserPrompt = parsed.FirstUserPrompt
 	summary.MessageCount = parsed.MessageCount
 	summary.ParseError = parsed.ParseError
@@ -269,6 +270,7 @@ func (s *Store) enrichSummary(summary *SessionSummary) {
 		summary.ID,
 		summary.CWD,
 		summary.SourceKind,
+		stringValue(summary.Title),
 		stringValue(summary.Slug),
 		stringValue(summary.Summary),
 		stringValue(summary.FirstUserPrompt),

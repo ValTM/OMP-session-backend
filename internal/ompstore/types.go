@@ -11,6 +11,7 @@ type SessionSummary struct {
 	CWD             string    `json:"cwd"`
 	SourceKind      string    `json:"sourceKind"`
 	RolloutPath     string    `json:"rolloutPath"`
+	Title           *string   `json:"title,omitempty"`
 	Slug            *string   `json:"slug,omitempty"`
 	Summary         *string   `json:"summary,omitempty"`
 	FirstUserPrompt *string   `json:"firstUserPrompt,omitempty"`
@@ -65,6 +66,7 @@ type CWDOption struct {
 }
 
 type ParseResult struct {
+	Title           *string
 	FirstUserPrompt *string
 	MessageCount    int
 	LatestMessageAt *time.Time
