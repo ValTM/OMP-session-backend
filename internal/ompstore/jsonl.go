@@ -123,20 +123,20 @@ func parseJSONLMessages(line []byte, includeRaw bool) ([]SessionMessage, error) 
 	}
 
 	content := readableContent(payload.Content)
-	messages := make([]SessionMessage, 0, 1+len(content.ToolCallNames))
-	if content.Text != "" {
+	if len(content.ToolCallNames) > 0 {
 		message := base
-		message.Text = content.Text
-		messages = append(messages, message)
-	}
-	for index, name := range content.ToolCallNames {
-		message := base
-		message.ID = fmt.Sprintf("%s:toolCall:%d", envelope.ID, index)
 		message.Role = "toolCall"
-		message.Text = "Tool call: " + name
-		messages = append(messages, message)
+		message.Text = toolCallText(content.Text, content.ToolCallNames)
+		return []SessionMessage{message}, nil
 	}
-	return messages, nil
+
+	if content.Text == "" {
+		return nil, nil
+	}
+
+	message := base
+	message.Text = content.Text
+	return []SessionMessage{message}, nil
 }
 
 type readableContentResult struct {
@@ -197,6 +197,17 @@ func readableContent(raw json.RawMessage) readableContentResult {
 		}
 	}
 	return readableContentResult{Text: strings.TrimSpace(strings.Join(out, "\n")), HasText: hasText, ToolCallNames: toolCallNames}
+}
+
+func toolCallText(prefix string, names []string) string {
+	var lines []string
+	if strings.TrimSpace(prefix) != "" {
+		lines = append(lines, strings.TrimSpace(prefix))
+	}
+	for _, name := range names {
+		lines = append(lines, "Tool call: "+name)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripToolLineAnchors(text string) string {
