@@ -31,13 +31,24 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 			continue
 		}
 
-		title, err := parseJSONLSessionTitle(line)
+		metadata, err := parseJSONLSessionMetadata(line)
 		if err != nil {
 			msg := fmt.Sprintf("line %d: %v", lineNumber, err)
 			result.ParseError = &msg
 			continue
 		}
-		if result.Title == nil && title != "" {
+		if metadata.ID != "" && result.SessionID == "" {
+			result.SessionID = metadata.ID
+		}
+		if metadata.CWD != "" && result.SessionCWD == "" {
+			result.SessionCWD = metadata.CWD
+		}
+		if metadata.StartedAt != nil && result.SessionStartedAt == nil {
+			startedAt := *metadata.StartedAt
+			result.SessionStartedAt = &startedAt
+		}
+		if result.Title == nil && metadata.Title != "" {
+			title := metadata.Title
 			result.Title = &title
 		}
 
@@ -79,18 +90,40 @@ func ParseSessionFile(path string, includeRaw bool) ParseResult {
 	return result
 }
 
-func parseJSONLSessionTitle(line []byte) (string, error) {
+type sessionMetadata struct {
+	ID        string
+	CWD       string
+	Title     string
+	StartedAt *time.Time
+}
+
+func parseJSONLSessionMetadata(line []byte) (sessionMetadata, error) {
 	var envelope struct {
-		Type  string `json:"type"`
-		Title string `json:"title"`
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		CWD       string `json:"cwd"`
+		Title     string `json:"title"`
+		Timestamp string `json:"timestamp"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return "", err
+		return sessionMetadata{}, err
 	}
 	if envelope.Type != "session" {
-		return "", nil
+		return sessionMetadata{}, nil
 	}
-	return strings.TrimSpace(envelope.Title), nil
+	var startedAt *time.Time
+	if envelope.Timestamp != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, envelope.Timestamp)
+		if err == nil {
+			startedAt = &parsed
+		}
+	}
+	return sessionMetadata{
+		ID:        strings.TrimSpace(envelope.ID),
+		CWD:       strings.TrimSpace(envelope.CWD),
+		Title:     strings.TrimSpace(envelope.Title),
+		StartedAt: startedAt,
+	}, nil
 }
 
 func parseJSONLMessages(line []byte, includeRaw bool) ([]SessionMessage, error) {

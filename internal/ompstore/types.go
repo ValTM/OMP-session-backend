@@ -66,11 +66,14 @@ type CWDOption struct {
 }
 
 type ParseResult struct {
-	Title           *string
-	FirstUserPrompt *string
-	MessageCount    int
-	LatestMessageAt *time.Time
-	Messages        []SessionMessage
-	SearchText      string
-	ParseError      *string
+	SessionID        string
+	SessionCWD       string
+	SessionStartedAt *time.Time
+	Title            *string
+	FirstUserPrompt  *string
+	MessageCount     int
+	LatestMessageAt  *time.Time
+	Messages         []SessionMessage
+	SearchText       string
+	ParseError       *string
 }

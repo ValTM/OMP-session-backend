@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,6 +89,8 @@ func (s *Store) ListSessions(ctx context.Context, filter ListSessionsFilter) (Li
 	defer rows.Close()
 
 	var all []SessionSummary
+	seenIDs := make(map[string]bool)
+	seenPaths := make(map[string]bool)
 	for rows.Next() {
 		var summary SessionSummary
 		var updatedAt int64
@@ -98,6 +101,8 @@ func (s *Store) ListSessions(ctx context.Context, filter ListSessionsFilter) (Li
 		}
 		summary.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 		summary.ResumeCommand = "omp --resume " + summary.ID
+		seenIDs[summary.ID] = true
+		seenPaths[summary.RolloutPath] = true
 		if rolloutSummary.Valid && rolloutSummary.String != "" {
 			summary.Summary = &rolloutSummary.String
 		}
@@ -112,6 +117,16 @@ func (s *Store) ListSessions(ctx context.Context, filter ListSessionsFilter) (Li
 	}
 	if err := rows.Err(); err != nil {
 		return ListSessionsResult{}, err
+	}
+
+	orphanSessions, err := s.listOrphanSessionSummaries(seenIDs, seenPaths)
+	if err != nil {
+		return ListSessionsResult{}, err
+	}
+	for _, summary := range orphanSessions {
+		if sessionMatches(summary, filter) {
+			all = append(all, summary)
+		}
 	}
 
 	sort.SliceStable(all, func(i, j int) bool {
@@ -152,6 +167,9 @@ func (s *Store) GetSession(ctx context.Context, id string) (SessionSummary, erro
 	var rolloutSummary sql.NullString
 	var rolloutSlug sql.NullString
 	if err := row.Scan(&summary.ID, &updatedAt, &summary.RolloutPath, &summary.CWD, &summary.SourceKind, &rolloutSummary, &rolloutSlug); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return s.getOrphanSession(id)
+		}
 		return SessionSummary{}, err
 	}
 	summary.UpdatedAt = time.Unix(updatedAt, 0).UTC()
@@ -228,6 +246,109 @@ func isToolResult(message SessionMessage) bool {
 	return message.Role == "toolResult"
 }
 
+func (s *Store) getOrphanSession(id string) (SessionSummary, error) {
+	summaries, err := s.listOrphanSessionSummaries(nil, nil)
+	if err != nil {
+		return SessionSummary{}, err
+	}
+	for _, summary := range summaries {
+		if summary.ID == id {
+			return summary, nil
+		}
+	}
+	return SessionSummary{}, sql.ErrNoRows
+}
+
+func (s *Store) listOrphanSessionSummaries(seenIDs map[string]bool, seenPaths map[string]bool) ([]SessionSummary, error) {
+	if s.ompRoot == "" {
+		return nil, nil
+	}
+	sessionsRoot := filepath.Join(s.ompRoot, "sessions")
+	var summaries []SessionSummary
+	err := filepath.WalkDir(sessionsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(sessionsRoot, path)
+		if err != nil {
+			return err
+		}
+		depth := pathDepth(relativePath)
+		if entry.IsDir() {
+			if relativePath != "." && depth >= 2 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if depth != 2 || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		if seenPaths != nil && seenPaths[path] {
+			return nil
+		}
+
+		summary, ok := s.summaryFromRolloutPath(path)
+		if !ok {
+			return nil
+		}
+		if seenIDs != nil && seenIDs[summary.ID] {
+			return nil
+		}
+		summaries = append(summaries, summary)
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return summaries, err
+}
+
+func (s *Store) summaryFromRolloutPath(path string) (SessionSummary, bool) {
+	parsed := s.cachedParse(path)
+	id := parsed.SessionID
+	if id == "" {
+		id = sessionIDFromRolloutPath(path)
+	}
+	if id == "" {
+		return SessionSummary{}, false
+	}
+
+	updatedAt := time.Time{}
+	if stat, err := os.Stat(path); err == nil {
+		updatedAt = stat.ModTime().UTC()
+	}
+	if parsed.SessionStartedAt != nil && updatedAt.IsZero() {
+		updatedAt = parsed.SessionStartedAt.UTC()
+	}
+
+	summary := SessionSummary{
+		ID:            id,
+		UpdatedAt:     updatedAt,
+		CWD:           parsed.SessionCWD,
+		SourceKind:    "cli",
+		RolloutPath:   path,
+		ResumeCommand: "omp --resume " + id,
+	}
+	applyParsedSummary(&summary, parsed)
+	return summary, true
+}
+
+func sessionIDFromRolloutPath(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	_, id, ok := strings.Cut(name, "_")
+	if !ok {
+		return ""
+	}
+	return id
+}
+
+func pathDepth(path string) int {
+	if path == "." || path == "" {
+		return 0
+	}
+	return len(strings.Split(path, string(os.PathSeparator)))
+}
+
 func (s *Store) ListCWDs(ctx context.Context) ([]CWDOption, error) {
 	rows, err := s.agentDB.QueryContext(ctx, `
 		SELECT cwd, COUNT(*)
@@ -259,6 +380,10 @@ func (s *Store) ListCWDs(ctx context.Context) ([]CWDOption, error) {
 
 func (s *Store) enrichSummary(summary *SessionSummary) {
 	parsed := s.cachedParse(summary.RolloutPath)
+	applyParsedSummary(summary, parsed)
+}
+
+func applyParsedSummary(summary *SessionSummary, parsed ParseResult) {
 	summary.Title = parsed.Title
 	summary.FirstUserPrompt = parsed.FirstUserPrompt
 	summary.MessageCount = parsed.MessageCount

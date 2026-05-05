@@ -44,6 +44,46 @@ func TestListSessionsSearchesSummaryAndPrompt(t *testing.T) {
 	}
 }
 
+func TestListSessionsIncludesTopLevelRolloutsMissingFromAgentDB(t *testing.T) {
+	root := t.TempDir()
+	rolloutDir := filepath.Join(root, "sessions", "--private-tmp--")
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(rolloutDir, "2026-05-05T13-45-33-322Z_orphan-session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"session","version":3,"id":"orphan-session","timestamp":"2026-05-05T13:45:33.322Z","cwd":"/tmp","title":"Update Service Contract Script","titleSource":"auto"}
+{"type":"message","id":"m1","timestamp":"2026-05-05T13:50:12Z","message":{"role":"user","content":[{"type":"text","text":"improve update script"}]}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nestedDir := filepath.Join(rolloutDir, "2026-05-05T13-45-33-322Z_parent-session")
+	if err := os.MkdirAll(nestedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "0-Subagent.jsonl"), []byte(`{"type":"session","version":3,"id":"subagent","timestamp":"2026-05-05T13:45:33.322Z","cwd":"/tmp","title":"Subagent"}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	db := setupEmptyDB(t)
+	store := &Store{ompRoot: root, agentDB: db, cache: make(map[string]cachedParseResult)}
+	defer store.Close()
+
+	result, err := store.ListSessions(context.Background(), ListSessionsFilter{Query: "update service", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("expected one orphan session, got %d: %#v", result.Total, result.Items)
+	}
+	if result.Items[0].ID != "orphan-session" {
+		t.Fatalf("unexpected session id %q", result.Items[0].ID)
+	}
+	if got := stringValue(result.Items[0].Title); got != "Update Service Contract Script" {
+		t.Fatalf("unexpected title %q", got)
+	}
+}
+
 func TestListSessionsUsesLatestMessageTimestampForUpdatedAt(t *testing.T) {
 	tmp := t.TempDir()
 	rollout := filepath.Join(tmp, "session.jsonl")
@@ -300,6 +340,35 @@ func mustParseTime(t *testing.T, value string) time.Time {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func setupEmptyDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE threads (
+			id TEXT PRIMARY KEY,
+			updated_at INTEGER NOT NULL,
+			rollout_path TEXT NOT NULL,
+			cwd TEXT NOT NULL,
+			source_kind TEXT NOT NULL
+		);
+		CREATE TABLE stage1_outputs (
+			thread_id TEXT PRIMARY KEY,
+			source_updated_at INTEGER NOT NULL,
+			raw_memory TEXT NOT NULL,
+			rollout_summary TEXT NOT NULL,
+			rollout_slug TEXT,
+			generated_at INTEGER NOT NULL
+		);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
 }
 
 func setupDB(t *testing.T, rollout string) *sql.DB {
