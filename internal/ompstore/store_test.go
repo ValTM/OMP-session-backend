@@ -212,6 +212,62 @@ func TestParseSessionFileClassifiesMixedAssistantToolTurnAsToolCall(t *testing.T
 	}
 }
 
+func TestParseSessionFileAttributesMainModels(t *testing.T) {
+	tmp := t.TempDir()
+	rollout := filepath.Join(tmp, "session.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"session","version":3,"id":"abc","timestamp":"2026-01-01T00:00:00Z","cwd":"/tmp"}
+{"type":"model_change","id":"model-1","timestamp":"2026-01-01T00:00:01Z","model":"github-copilot/gpt-5.5"}
+{"type":"message","id":"user-1","timestamp":"2026-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","id":"tool-call-1","timestamp":"2026-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"read"}],"usage":{"input":10,"output":5,"cacheRead":100,"cacheWrite":2,"totalTokens":117,"reasoningTokens":1,"cost":{"input":0.01,"output":0.02,"cacheRead":0.001,"cacheWrite":0.002,"total":0.033},"premiumRequests":1}}}
+{"type":"message","id":"tool-result-1","timestamp":"2026-01-01T00:00:04Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"read","content":[{"type":"text","text":"file contents"}]}}
+{"type":"model_change","id":"model-2","timestamp":"2026-01-01T00:00:05Z","model":"anthropic/claude-opus-4.5"}
+{"type":"message","id":"assistant-1","timestamp":"2026-01-01T00:00:06Z","message":{"role":"assistant","provider":"github-copilot","model":"gpt-5.6","content":[{"type":"text","text":"done"}],"usage":{"input":20,"output":7,"cacheRead":200,"cacheWrite":3,"totalTokens":230,"cost":{"input":0.02,"output":0.03,"cacheRead":0.002,"cacheWrite":0.003,"total":0.055}}}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := ParseSessionFile(rollout, false)
+	wantModels := []string{"github-copilot/gpt-5.5", "anthropic/claude-opus-4.5", "github-copilot/gpt-5.6"}
+	if strings.Join(parsed.MainModels, ",") != strings.Join(wantModels, ",") {
+		t.Fatalf("unexpected main models %#v", parsed.MainModels)
+	}
+	if parsed.MainUsage == nil {
+		t.Fatal("expected main usage")
+	}
+	if parsed.MainUsage.TotalTokens != 347 {
+		t.Fatalf("expected total usage 347, got %d", parsed.MainUsage.TotalTokens)
+	}
+	if parsed.MainUsage.Input != 30 || parsed.MainUsage.Output != 12 || parsed.MainUsage.CacheRead != 300 || parsed.MainUsage.CacheWrite != 5 {
+		t.Fatalf("unexpected usage totals: %#v", parsed.MainUsage)
+	}
+	if parsed.MainUsage.ReasoningTokens == nil || *parsed.MainUsage.ReasoningTokens != 1 {
+		t.Fatalf("unexpected reasoning tokens: %#v", parsed.MainUsage.ReasoningTokens)
+	}
+
+	byID := make(map[string]SessionMessage)
+	for _, message := range parsed.Messages {
+		byID[message.ID] = message
+	}
+	if byID["user-1"].Model != "" {
+		t.Fatalf("expected user message to have no model, got %q", byID["user-1"].Model)
+	}
+	if got := byID["tool-call-1"].Model; got != "github-copilot/gpt-5.5" {
+		t.Fatalf("expected tool call model from model_change, got %q", got)
+	}
+	if byID["tool-call-1"].Usage == nil || byID["tool-call-1"].Usage.TotalTokens != 117 {
+		t.Fatalf("expected tool call usage, got %#v", byID["tool-call-1"].Usage)
+	}
+	if got := byID["tool-result-1"].Model; got != "github-copilot/gpt-5.5" {
+		t.Fatalf("expected tool result model linked from tool call, got %q", got)
+	}
+	if got := byID["tool-result-1"].ModelSource; got != "toolCallLink" {
+		t.Fatalf("expected tool result source toolCallLink, got %q", got)
+	}
+	if got := byID["assistant-1"].Model; got != "github-copilot/gpt-5.6" {
+		t.Fatalf("expected explicit assistant model, got %q", got)
+	}
+}
+
 func TestGetMessagesFiltersToolsBeforePagination(t *testing.T) {
 	tmp := t.TempDir()
 	rollout := filepath.Join(tmp, "session.jsonl")

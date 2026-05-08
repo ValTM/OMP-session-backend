@@ -387,6 +387,8 @@ func applyParsedSummary(summary *SessionSummary, parsed ParseResult) {
 	summary.Title = parsed.Title
 	summary.FirstUserPrompt = parsed.FirstUserPrompt
 	summary.MessageCount = parsed.MessageCount
+	summary.MainModels = nonNilModels(parsed.MainModels)
+	summary.MainUsage = parsed.MainUsage
 	summary.ParseError = parsed.ParseError
 	if parsed.LatestMessageAt != nil && parsed.LatestMessageAt.After(summary.UpdatedAt) {
 		summary.UpdatedAt = parsed.LatestMessageAt.UTC()
@@ -399,6 +401,8 @@ func applyParsedSummary(summary *SessionSummary, parsed ParseResult) {
 		stringValue(summary.Slug),
 		stringValue(summary.Summary),
 		stringValue(summary.FirstUserPrompt),
+		strings.Join(summary.MainModels, " "),
+		usageSearchText(summary.MainUsage),
 		parsed.SearchText,
 	}, " ")
 }
@@ -473,6 +477,20 @@ func messageCountBucketMatches(count int, bucket string, includeEmpty bool) bool
 	default:
 		return true
 	}
+}
+
+func usageSearchText(usage *TokenUsage) string {
+	if usage == nil || usage.TotalTokens == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d tokens", usage.TotalTokens)
+}
+
+func nonNilModels(models []string) []string {
+	if models == nil {
+		return []string{}
+	}
+	return models
 }
 
 func stringValue(value *string) string {
